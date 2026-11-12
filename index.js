@@ -1,32 +1,24 @@
 // ==================== Configuration ====================
 
-const BOT_TOKEN = "TELEGRAM_BOT_TOKEN_HERE"; // Replace with your Telegram bot token
-const BALE_BOT_TOKEN = "BALE_BOT_TOKEN_HERE"; // Replace with your Bale bot token
-const BOT_WEBHOOK = "/endpoint";
-
-// User Mapping: Telegram Sender → Bale Recipient
-// example: { "123456789": "987654321" } means Telegram user with ID 123456789 will have their files sent to Bale user with ID 987654321
-const USER_MAPPING = {
-  "tg_user_id": "bale_user_id",
-};
-
-const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+const BOT_WEBHOOK = "/webhook";
 
 // ==================== Event Listener ====================
 
-addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request));
-});
+export default {
+  async fetch(request, env) {
+    return handleRequest(request, env);
+  }
+};
 
-async function handleRequest(request) {
+async function handleRequest(request, env) {
   const url = new URL(request.url);
 
   if (url.pathname === BOT_WEBHOOK) {
-    return handleWebhook(request);
+    return handleWebhook(request, env);
   }
 
   if (url.pathname === '/registerWebhook') {
-    return registerWebhook(request);
+    return registerWebhook(request, env);
   }
 
   return new Response('Not Found', { status: 404 });
@@ -34,21 +26,21 @@ async function handleRequest(request) {
 
 // ==================== Webhook Handlers ====================
 
-async function handleWebhook(request) {
+async function handleWebhook(request, env) {
   const update = await request.json();
 
   if (update.message) {
-    await processMessage(update.message);
+    await processMessage(update.message, env);
   }
 
   return new Response('OK');
 }
 
-async function registerWebhook(request) {
+async function registerWebhook(request, env) {
   const url = new URL(request.url);
   const webhookUrl = `${url.protocol}//${url.hostname}${BOT_WEBHOOK}`;
 
-  const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`, {
+  const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/setWebhook`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -63,66 +55,66 @@ async function registerWebhook(request) {
 
 // ==================== Message Processing ====================
 
-async function processMessage(message) {
+async function processMessage(message, env) {
   const userId = message.chat.id;
-  const recipientId = USER_MAPPING[userId];
+  const recipientId = env.BALE_CHAT_ID;
 
   // Check if user is in mapping
   if (!recipientId) {
-    await sendMessage(userId, message.message_id, '❌ You are not authorized to use this bot.');
+    await sendMessage(userId, message.message_id, '❌ You are not authorized to use this bot.', env);
     return;
   }
 
   // Handle /start command
   if (message.text && message.text === '/start') {
     const welcomeText = '👋 Welcome!\n\nSend a file to forward to the recipient.\n\n📁 Max file size: 20 MB';
-    await sendMessage(userId, message.message_id, welcomeText);
+    await sendMessage(userId, message.message_id, welcomeText, env);
     return;
   }
 
   // Handle file upload
   if (message.document) {
-    await handleFileTransfer(userId, recipientId, message.document);
+    await handleFileTransfer(userId, recipientId, message.document, env);
     return;
   }
 
   if (message.photo) {
-    await handlePhotoTransfer(userId, recipientId, message.photo);
+    await handlePhotoTransfer(userId, recipientId, message.photo, env);
     return;
   }
 
   if (message.video) {
-    await handleVideoTransfer(userId, recipientId, message.video);
+    await handleVideoTransfer(userId, recipientId, message.video, env);
     return;
   }
 
   if (message.audio) {
-    await handleAudioTransfer(userId, recipientId, message.audio);
+    await handleAudioTransfer(userId, recipientId, message.audio, env);
     return;
   }
 
-  await sendMessage(userId, message.message_id, '❌ Please send a file.');
+  await sendMessage(userId, message.message_id, '❌ Please send a file.', env);
 }
 
 // ==================== File Transfer Handlers ====================
 
-async function handleFileTransfer(senderId, recipientId, document) {
+async function handleFileTransfer(senderId, recipientId, document, env) {
   if (document.file_size > MAX_FILE_SIZE) {
-    await sendMessage(senderId, null, `❌ Error: File size (${formatSize(document.file_size)}) exceeds max limit (20 MB).`);
+    await sendMessage(senderId, null, `❌ Error: File size (${formatSize(document.file_size)}) exceeds max limit (20 MB).`, env);
     return;
   }
 
   try {
-    await sendMessage(senderId, null, '⏳ Processing...');
+    await sendMessage(senderId, null, '⏳ Processing...', env);
 
-    const file = await getFile(document.file_id);
-    const fileBuffer = await downloadFile(file.file_path);
+    const file = await getFile(document.file_id, env);
+    const fileBuffer = await downloadFile(file.file_path, env);
 
     const formData = new FormData();
     formData.append('chat_id', recipientId);
     formData.append('document', new Blob([fileBuffer]), document.file_name || 'file');
 
-    const response = await fetch(`https://tapi.bale.ai/bot${BALE_BOT_TOKEN}/sendDocument`, {
+    const response = await fetch(`https://tapi.bale.ai/bot${env.BALE_TOKEN}/sendDocument`, {
       method: 'POST',
       body: formData
     });
@@ -130,29 +122,29 @@ async function handleFileTransfer(senderId, recipientId, document) {
     const result = await response.json();
 
     if (result.ok) {
-      await sendMessage(senderId, null, '✅ File sent successfully.');
+      await sendMessage(senderId, null, '✅ File sent successfully.', env);
     } else {
-      await sendMessage(senderId, null, `❌ Error: ${result.description}`);
+      await sendMessage(senderId, null, `❌ Error: ${result.description}`, env);
     }
   } catch (error) {
     console.error('Error transferring file:', error);
-    await sendMessage(senderId, null, '❌ Error while transferring file.');
+    await sendMessage(senderId, null, '❌ Error while transferring file.', env);
   }
 }
 
-async function handlePhotoTransfer(senderId, recipientId, photos) {
+async function handlePhotoTransfer(senderId, recipientId, photos, env) {
   try {
-    await sendMessage(senderId, null, '⏳ Processing...');
+    await sendMessage(senderId, null, '⏳ Processing...', env);
 
     const largestPhoto = photos[photos.length - 1];
-    const file = await getFile(largestPhoto.file_id);
-    const fileBuffer = await downloadFile(file.file_path);
+    const file = await getFile(largestPhoto.file_id, env);
+    const fileBuffer = await downloadFile(file.file_path, env);
 
     const formData = new FormData();
     formData.append('chat_id', recipientId);
     formData.append('photo', new Blob([fileBuffer]), 'photo.jpg');
 
-    const response = await fetch(`https://tapi.bale.ai/bot${BALE_BOT_TOKEN}/sendPhoto`, {
+    const response = await fetch(`https://tapi.bale.ai/bot${env.BALE_TOKEN}/sendPhoto`, {
       method: 'POST',
       body: formData
     });
@@ -160,34 +152,34 @@ async function handlePhotoTransfer(senderId, recipientId, photos) {
     const result = await response.json();
 
     if (result.ok) {
-      await sendMessage(senderId, null, '✅ Photo sent successfully.');
+      await sendMessage(senderId, null, '✅ Photo sent successfully.', env);
     } else {
-      await sendMessage(senderId, null, `❌ Error: ${result.description}`);
+      await sendMessage(senderId, null, `❌ Error: ${result.description}`, env);
     }
   } catch (error) {
     console.error('Error transferring photo:', error);
-    await sendMessage(senderId, null, '❌ Error while transferring photo.');
+    await sendMessage(senderId, null, '❌ Error while transferring photo.', env);
   }
 }
 
-async function handleVideoTransfer(senderId, recipientId, video) {
+async function handleVideoTransfer(senderId, recipientId, video, env) {
   if (video.file_size > MAX_FILE_SIZE) {
-    await sendMessage(senderId, null, `❌ Error: Video size (${formatSize(video.file_size)}) exceeds max limit.`);
+    await sendMessage(senderId, null, `❌ Error: Video size (${formatSize(video.file_size)}) exceeds max limit.`, env);
     return;
   }
 
   try {
-    await sendMessage(senderId, null, '⏳ Processing...');
+    await sendMessage(senderId, null, '⏳ Processing...', env);
 
-    const file = await getFile(video.file_id);
-    const fileBuffer = await downloadFile(file.file_path);
+    const file = await getFile(video.file_id, env);
+    const fileBuffer = await downloadFile(file.file_path, env);
 
     const formData = new FormData();
     formData.append('chat_id', recipientId);
     formData.append('video', new Blob([fileBuffer]), 'video.mp4');
     formData.append('supports_streaming', 'true');
 
-    const response = await fetch(`https://tapi.bale.ai/bot${BALE_BOT_TOKEN}/sendVideo`, {
+    const response = await fetch(`https://tapi.bale.ai/bot${env.BALE_TOKEN}/sendVideo`, {
       method: 'POST',
       body: formData
     });
@@ -195,33 +187,33 @@ async function handleVideoTransfer(senderId, recipientId, video) {
     const result = await response.json();
 
     if (result.ok) {
-      await sendMessage(senderId, null, '✅ Video sent successfully.');
+      await sendMessage(senderId, null, '✅ Video sent successfully.', env);
     } else {
-      await sendMessage(senderId, null, `❌ Error: ${result.description}`);
+      await sendMessage(senderId, null, `❌ Error: ${result.description}`, env);
     }
   } catch (error) {
     console.error('Error transferring video:', error);
-    await sendMessage(senderId, null, '❌ Error while transferring video.');
+    await sendMessage(senderId, null, '❌ Error while transferring video.', env);
   }
 }
 
-async function handleAudioTransfer(senderId, recipientId, audio) {
+async function handleAudioTransfer(senderId, recipientId, audio, env) {
   if (audio.file_size > MAX_FILE_SIZE) {
-    await sendMessage(senderId, null, `❌ Error: Audio file size exceeds max limit.`);
+    await sendMessage(senderId, null, `❌ Error: Audio file size exceeds max limit.`, env);
     return;
   }
 
   try {
-    await sendMessage(senderId, null, '⏳ Processing...');
+    await sendMessage(senderId, null, '⏳ Processing...', env);
 
-    const file = await getFile(audio.file_id);
-    const fileBuffer = await downloadFile(file.file_path);
+    const file = await getFile(audio.file_id, env);
+    const fileBuffer = await downloadFile(file.file_path, env);
 
     const formData = new FormData();
     formData.append('chat_id', recipientId);
     formData.append('audio', new Blob([fileBuffer]), audio.file_name || 'audio.mp3');
 
-    const response = await fetch(`https://tapi.bale.ai/bot${BALE_BOT_TOKEN}/sendAudio`, {
+    const response = await fetch(`https://tapi.bale.ai/bot${env.BALE_TOKEN}/sendAudio`, {
       method: 'POST',
       body: formData
     });
@@ -229,19 +221,19 @@ async function handleAudioTransfer(senderId, recipientId, audio) {
     const result = await response.json();
 
     if (result.ok) {
-      await sendMessage(senderId, null, '✅ Audio sent successfully.');
+      await sendMessage(senderId, null, '✅ Audio sent successfully.', env);
     } else {
-      await sendMessage(senderId, null, `❌ Error: ${result.description}`);
+      await sendMessage(senderId, null, `❌ Error: ${result.description}`, env);
     }
   } catch (error) {
     console.error('Error transferring audio:', error);
-    await sendMessage(senderId, null, '❌ Error while transferring audio.');
+    await sendMessage(senderId, null, '❌ Error while transferring audio.', env);
   }
 }
 
 // ==================== Telegram API Methods ====================
 
-async function sendMessage(chatId, replyId, text) {
+async function sendMessage(chatId, replyId, text, env) {
   const params = {
     chat_id: chatId,
     text: text,
@@ -252,21 +244,21 @@ async function sendMessage(chatId, replyId, text) {
     params.reply_to_message_id = replyId;
   }
 
-  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params)
   });
 }
 
-async function getFile(fileId) {
-  const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}`);
+async function getFile(fileId, env) {
+  const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
   const data = await response.json();
   return data.result;
 }
 
-async function downloadFile(filePath) {
-  const response = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`);
+async function downloadFile(filePath, env) {
+  const response = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${filePath}`);
   return await response.arrayBuffer();
 }
 
