@@ -1,5 +1,4 @@
-name = "telegram-to-bale-file-transfer-bot"
+name = "strategy"
 main = "index.js"
 compatibility_date = "2024-01-01"
-
 workers_dev = true
